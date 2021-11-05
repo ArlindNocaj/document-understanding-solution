@@ -16,6 +16,7 @@ import json
 import os
 import filetype
 from helper import FileHelper, AwsHelper
+import datastore
 import boto3
 
 ASYNC_JOB_TIMEOUT_SECONDS = 900
@@ -34,69 +35,45 @@ def postMessage(client, qUrl, jsonMessage, delaySeconds=0):
     print("Submitted message to queue: {}".format(message))
 
 
-def get_mime_type(request):
+def get_mime_type(bucketName, objectName):
     """
     Utilizes magic number checking via the 'filetype' library to determine if the files are of a valid type.
     """
     client = boto3.client('s3')
-    local_path = f"/tmp/{request['objectName'].rsplit('/',1)[-1]}"
-    client.download_file(request['bucketName'],
-                         request['objectName'], local_path)
+    local_path = f"/tmp/{objectName.rsplit('/',1)[-1]}"
+    client.download_file(bucketName,
+                         objectName, local_path)
 
     return filetype.guess(local_path)
 
 
-def processRequest(request):
+def processRequest(documentId, bucketName, objectName, processingQueueUrl, errorHandlerTimeoutSeconds, jobErrorHandlerQueueUrl):
 
     output = ""
-
-    print("Request: {}".format(request))
-
-    documentId = request["documentId"]
-    bucketName = request["bucketName"]
-    objectName = request["objectName"]
-    jobErrorHandlerQueueUrl = request['errorHandlerQueueUrl']
+    print("Request: documentId {}, bucketName {}, objectName {}, processingQueueUrl {}, errorHandlerTimeoutSeconds {}, jobErrorHandlerQueueUrl {}".format(documentId, bucketName, objectName, processingQueueUrl, errorHandlerTimeoutSeconds, jobErrorHandlerQueueUrl))
 
     print("Input Object: {}/{}".format(bucketName, objectName))
 
     client = AwsHelper().getClient('sqs')
 
-    file_type = get_mime_type(request)
+    features = ["Text", "Forms", "Tables"]
+    jsonMessage = {'documentId': documentId,
+                   "features": features,
+                   'bucketName': bucketName,
+                   'objectName': objectName}
+    postMessage(client, processingQueueUrl, jsonMessage)
 
-    # If not expected extension, change status to FAILED and exit
-    if not file_type or file_type.mime not in ['application/pdf', 'image/png', 'image/jpeg']:
-        jsonErrorHandlerMessage = {
-            'documentId': documentId
-        }
-        postMessage(client, jobErrorHandlerQueueUrl, jsonErrorHandlerMessage)
-        return
+    jsonErrorHandlerMessage = {
+        'documentId': documentId
+    }
+    postMessage(client, jobErrorHandlerQueueUrl,
+                jsonErrorHandlerMessage, errorHandlerTimeoutSeconds)
 
-    if(file_type.mime in ['image/png', 'image/jpeg']):
-        qUrl = request['syncQueueUrl']
-        errorHandlerTimeoutSeconds = SYNC_JOB_TIMEOUT_SECONDS
-    elif (file_type.mime in ['application/pdf']):
-        qUrl = request['asyncQueueUrl']
-        errorHandlerTimeoutSeconds = ASYNC_JOB_TIMEOUT_SECONDS
-
-    if(qUrl):
-        features = ["Text", "Forms", "Tables"]
-        jsonMessage = {'documentId': documentId,
-                       "features": features,
-                       'bucketName': bucketName,
-                       'objectName': objectName}
-        postMessage(client, qUrl, jsonMessage)
-
-        jsonErrorHandlerMessage = {
-            'documentId': documentId
-        }
-        postMessage(client, jobErrorHandlerQueueUrl,
-                    jsonErrorHandlerMessage, errorHandlerTimeoutSeconds)
-
-    output = "Completed routing for documentId: {}, object: {}/{}".format(
-        documentId, bucketName, objectName)
+    output = "Completed routing for documentId: {}, object: {}/{}, to {}".format(
+        documentId, bucketName, objectName, processingQueueUrl)
 
 
-def processRecord(record, syncQueueUrl, asyncQueueUrl, errorHandlerQueueUrl):
+def processRecord(record, syncQueueUrl, syncBarcodeQueueUrl, asyncQueueUrl, errorHandlerQueueUrl):
 
     newImage = record["dynamodb"]["NewImage"]
 
@@ -118,15 +95,31 @@ def processRecord(record, syncQueueUrl, asyncQueueUrl, errorHandlerQueueUrl):
         documentId, bucketName, objectName, documentStatus))
 
     if(documentId and bucketName and objectName and documentStatus):
-        request = {}
-        request["documentId"] = documentId
-        request["bucketName"] = bucketName
-        request["objectName"] = objectName
-        request['syncQueueUrl'] = syncQueueUrl
-        request['asyncQueueUrl'] = asyncQueueUrl
-        request['errorHandlerQueueUrl'] = errorHandlerQueueUrl
-        processRequest(request)
+        file_type = get_mime_type(bucketName, objectName)
+        client = AwsHelper().getClient('sqs')
 
+        # If not expected extension, change status to FAILED and exit
+        if not file_type or file_type.mime not in ['application/pdf', 'image/png', 'image/jpeg']:
+            jsonErrorHandlerMessage = {
+                'documentId': documentId
+            }
+            postMessage(client, errorHandlerQueueUrl, jsonErrorHandlerMessage)
+            return
+
+        # trigger the sync or async textract pipeline
+        if (file_type.mime in ['image/png', 'image/jpeg']):
+            # sync textract pipeline
+            processRequest(documentId, bucketName, objectName, syncQueueUrl, SYNC_JOB_TIMEOUT_SECONDS,
+                           errorHandlerQueueUrl)
+        elif (file_type.mime in ['application/pdf']):
+            # async textract pipeline
+            processRequest(documentId, bucketName, objectName, asyncQueueUrl, ASYNC_JOB_TIMEOUT_SECONDS,
+                           errorHandlerQueueUrl)
+
+        # barcode pipeline accepts both pdf or images
+        if syncBarcodeQueueUrl:
+            processRequest(documentId, bucketName, objectName, syncBarcodeQueueUrl, ASYNC_JOB_TIMEOUT_SECONDS,
+                        errorHandlerQueueUrl)
 
 def lambda_handler(event, context):
 
@@ -135,8 +128,10 @@ def lambda_handler(event, context):
         print("Event: {}".format(event))
 
         syncQueueUrl = os.environ['SYNC_QUEUE_URL']
+        syncBarcodeQueueUrl = os.getenv('SYNC_BARCODE_QUEUE_URL', None)
         asyncQueueUrl = os.environ['ASYNC_QUEUE_URL']
         errorHandlerQueueUrl = os.environ['ERROR_HANDLER_QUEUE_URL']
+
         if("Records" in event and event["Records"]):
             for record in event["Records"]:
                 try:
@@ -144,7 +139,7 @@ def lambda_handler(event, context):
 
                     if("eventName" in record and record["eventName"] == "INSERT"):
                         if("dynamodb" in record and record["dynamodb"] and "NewImage" in record["dynamodb"]):
-                            processRecord(record, syncQueueUrl,
+                            processRecord(record, syncQueueUrl, syncBarcodeQueueUrl,
                                           asyncQueueUrl, errorHandlerQueueUrl)
 
                 except Exception as e:

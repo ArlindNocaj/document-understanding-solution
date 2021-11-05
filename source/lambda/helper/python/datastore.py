@@ -34,7 +34,7 @@ class DocumentStore:
         self._documentsTableName = documentsTableName
         self._outputTableName = outputTableName
 
-    def createDocument(self, documentId, bucketName, objectName):
+    def createDocument(self, documentId, bucketName, objectName, documentPipesRequests = ["textract"] ):
 
         err = None
 
@@ -45,13 +45,15 @@ class DocumentStore:
         try:
             table.update_item(
                 Key={"documentId": documentId},
-                UpdateExpression='SET bucketName = :bucketNameValue, objectName = :objectNameValue, documentStatus = :documentstatusValue, documentCreatedOn = :documentCreatedOnValue',
+                UpdateExpression='SET bucketName = :bucketNameValue, objectName = :objectNameValue, documentStatus = :documentstatusValue, documentCreatedOn = :documentCreatedOnValue, documentPipesRequests = :documentPipesRequestsValue, documentPipesFinished = :documentPipesFinishedValue',
                 ConditionExpression='attribute_not_exists(documentId)',
                 ExpressionAttributeValues={
                     ':bucketNameValue': bucketName,
                     ':objectNameValue': objectName,
                     ':documentstatusValue': 'IN_PROGRESS',
                     ':documentCreatedOnValue': str(datetime.datetime.utcnow()),
+                    ':documentPipesRequestsValue': documentPipesRequests,
+                    ':documentPipesFinishedValue' : ["none"],
                 }
             )
         except ClientError as e:
@@ -89,12 +91,75 @@ class DocumentStore:
 
         return err
 
+    def updateDocumentPipesRequest(self, documentId, pipesRequest):
+
+        err = None
+
+        dynamodb = AwsHelper().getResource("dynamodb")
+        table = dynamodb.Table(self._documentsTableName)
+
+        try:
+            table.update_item(
+                Key={'documentId': documentId},
+                UpdateExpression='SET documentPipesRequests= :documentPipesRequestsValue',
+                ConditionExpression='attribute_exists(documentId)',
+                ExpressionAttributeValues={
+                    ':documentPipesRequestsValue': set(pipesRequest)
+                }
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == "ConditionalCheckFailedException":
+                print(e.response['Error']['Message'])
+                err = {'Error': 'Document does not exist.'}
+            else:
+                raise
+
+        return err
+
+    def updateDocumentPipesFinished(self, documentId, pipesJustFinished):
+
+        err = None
+
+        dynamodb = AwsHelper().getResource("dynamodb")
+        table = dynamodb.Table(self._documentsTableName)
+        doc_items = self.getDocument(documentId)
+        pipesFinished = doc_items["documentPipesFinished"]
+        pipesFinished = list(set(pipesFinished + pipesJustFinished))
+
+        try:
+            table.update_item(
+                Key={'documentId': documentId},
+                UpdateExpression='SET documentPipesFinished= :documentPipesFinishedValue',
+                ConditionExpression='attribute_exists(documentId)',
+                ExpressionAttributeValues={
+                    ':documentPipesFinishedValue': pipesFinished
+                }
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] == "ConditionalCheckFailedException":
+                print(e.response['Error']['Message'])
+                err = {'Error': 'Document does not exist.'}
+            else:
+                raise
+
+        return err
+
     def markDocumentComplete(self, documentId):
 
         err = None
 
         dynamodb = AwsHelper().getResource("dynamodb")
         table = dynamodb.Table(self._documentsTableName)
+
+        doc_items = self.getDocument(documentId)
+        pipesRequests = doc_items["documentPipesRequests"]
+        pipesFinished = doc_items["documentPipesFinished"]
+
+        remainingPipes = list(set(pipesRequests)-set(pipesFinished))
+
+        if len(remainingPipes)>0:
+            print(f"Document {documentId} not completed, remaining pipes {remainingPipes}")
+            return err
 
         try:
             table.update_item(
@@ -132,6 +197,8 @@ class DocumentStore:
                 'bucketName': ddbGetItemResponse['Item']['bucketName']['S'],
                 'objectName': ddbGetItemResponse['Item']['objectName']['S'],
                 'documentStatus': ddbGetItemResponse['Item']['documentStatus']['S'],
+                'documentPipesRequests': [item["S"] for item in ddbGetItemResponse['Item']['documentPipesRequests']['L']],
+                'documentPipesFinished': [item["S"] for item in ddbGetItemResponse['Item']['documentPipesFinished']['L']],
             }
 
         return itemToReturn

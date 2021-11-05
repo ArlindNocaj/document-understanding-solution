@@ -295,15 +295,17 @@ class ComprehendHelper:
             # to detect and skip duplicates
             entities = set()
 
-            for e in comprehendPIIEntities[p]:
-                
+            entities_page = comprehendPIIEntities[p] if comprehendPIIEntities[p] else []
+
+            for e in entities_page:
+
                 # comprehend doesn't return the text of the entity it detected, we must
                 # get it from the page we sent it originally
                 e['Text'] = rawPages[p][e['BeginOffset']:e['EndOffset']]
-                
+
                 # add this entity if not already present
                 if e['Text'].upper() not in entities:
-                    
+
                     # add entity to results list
                     entity = {}
                     entity['Text'] = e['Text']
@@ -314,7 +316,7 @@ class ComprehendHelper:
                     if e['Type'] not in pii_entities_to_index:
                         pii_entities_to_index[e['Type']] = []
                     pii_entities_to_index[e['Type']].append(e['Text'])
-        
+
                     # make a note of this added entity
                     entities.add(e['Text'].upper())
 

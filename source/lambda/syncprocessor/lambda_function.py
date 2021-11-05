@@ -135,6 +135,7 @@ def processImage(documentId, features, bucketName, outputBucketName, objectName,
         opg.indexDocument(opg_output[DOCTEXT], comprehendAndMedicalEntities)
 
     ds = datastore.DocumentStore(documentsTableName, outputTableName)
+    ds.updateDocumentPipesFinished(documentId, ["textract"])
     ds.markDocumentComplete(documentId)
 
 # --------------- Main handler ------------------
@@ -152,7 +153,6 @@ def processRequest(request):
     documentId = request['documentId']
     outputBucketName = request['outputBucketName']
     outputTable = request['outputTable']
-    documentsTable = request['documentsTable']
     documentsTable = request["documentsTable"]
     elasticsearchDomain = request["elasticsearchDomain"]
 
