@@ -1,16 +1,21 @@
 # Difference to [awslabs/document-understanding-solution](https://github.com/awslabs/document-understanding-solution)
 
 This branch adds support for general barcode information extraction.
-The full solution including active barcode processing can be deployed with:
+
+To activate barcode processing adjust the values in `package.json` as follows:
+```
+  "region": "us-east-1"
+  "enableBarcodes": "true",
+  "email": "yourmail@domain...",
+```
+
+Then the full solution including active barcode processing can be deployed with:
 
 ```
 python3 -m venv venv || true
 . venv/bin/activate
 pip install boto3
 pip install moto==1.3.14
-
-rm -rf app/.next
-rm -rf app/out
 
 export STACKNAME=DUS
 export ENABLE_BARCODES=true
