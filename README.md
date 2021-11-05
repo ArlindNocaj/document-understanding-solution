@@ -1,10 +1,4 @@
-# Document Understanding Solution
-
-DUS leverages the power of Amazon Textract, Amazon Comprehend , Amazon Comprehend Medical Amazon Elasticsearch and Amazon Kendra to provide digitization , domain-specific data discovery, redaction controls , structural component extraction and other document processing & understanding capaibilities.
-
-![img](./images/DUS_with_kendra.png)
-
-## Difference to [awslabs/document-understanding-solution](https://github.com/awslabs/document-understanding-solution)
+# Difference to [awslabs/document-understanding-solution](https://github.com/awslabs/document-understanding-solution)
 
 This branch adds support for general barcode information extraction.
 The full solution including active barcode processing can be deployed with:
@@ -27,6 +21,13 @@ export NEXT_PUBLIC_ENABLE_BARCODES=true
 yarn deploy
 
 ```
+
+
+# Document Understanding Solution
+
+DUS leverages the power of Amazon Textract, Amazon Comprehend , Amazon Comprehend Medical Amazon Elasticsearch and Amazon Kendra to provide digitization , domain-specific data discovery, redaction controls , structural component extraction and other document processing & understanding capaibilities.
+
+![img](./images/DUS_with_kendra.png)
 
 ## Architecture Diagram
 
